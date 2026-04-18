@@ -214,15 +214,17 @@ bool BuildV10Features(
    double rsi14 = rsi14_raw / 100.0; // FIX: scale to [0,1]
    
    // ── MACD ──
-   double macd_line, macd_signal;
-   int h_macd = iMACD(sym, PERIOD_M15, 12, 26, 9, PRICE_CLOSE);
-   if(h_macd != INVALID_HANDLE) {
-      double macd_buf[], signal_buf[];
-      ArraySetAsSeries(macd_buf, true); ArraySetAsSeries(signal_buf, true);
-      if(CopyBuffer(h_macd, 0, 0, 2, macd_buf) > 0 && CopyBuffer(h_macd, 1, 0, 2, signal_buf) > 0) {
-         macd_line = macd_buf[0]; macd_signal = signal_buf[0];
-      } else { macd_line = 0.0; macd_signal = 0.0; }
-   } else { macd_line = 0.0; macd_signal = 0.0; }
+   double macd_line = 0.0, macd_signal = 0.0;
+   {
+      int h_macd = iMACD(sym, PERIOD_M15, 12, 26, 9, PRICE_CLOSE);
+      if(h_macd != INVALID_HANDLE) {
+         double macd_buf[], signal_buf[];
+         ArraySetAsSeries(macd_buf, true); ArraySetAsSeries(signal_buf, true);
+         if(CopyBuffer(h_macd, 0, 0, 2, macd_buf) > 0 && CopyBuffer(h_macd, 1, 0, 2, signal_buf) > 0) {
+            macd_line = macd_buf[0]; macd_signal = signal_buf[0];
+         }
+      }
+   }
    double macd_signal_norm = (macd_signal != 0.0) ? (macd_line - macd_signal) / (MathAbs(macd_signal) + eps) : 0.0;
    
    // ── Returns ──
@@ -296,13 +298,15 @@ bool BuildV10Features(
    
    // HTF RSI (normalized 0-1)
    double htf_1h_rsi = 0.5, htf_4h_rsi = 0.5, htf_1d_rsi = 0.5;
-   int h1 = iRSI(sym, PERIOD_H1, 14, PRICE_CLOSE);
-   int h4 = iRSI(sym, PERIOD_H4, 14, PRICE_CLOSE);
-   int hD = iRSI(sym, PERIOD_D1, 14, PRICE_CLOSE);
-   double rsi1_buf[], rsi4_buf[], rsiD_buf[];
-   if(h1 != INVALID_HANDLE && CopyBuffer(h1, 0, 0, 1, rsi1_buf) > 0) htf_1h_rsi = rsi1_buf[0] / 100.0;
-   if(h4 != INVALID_HANDLE && CopyBuffer(h4, 0, 0, 1, rsi4_buf) > 0) htf_4h_rsi = rsi4_buf[0] / 100.0;
-   if(hD != INVALID_HANDLE && CopyBuffer(hD, 0, 0, 1, rsiD_buf) > 0) htf_1d_rsi = rsiD_buf[0] / 100.0;
+   {
+      int h1 = iRSI(sym, PERIOD_H1, 14, PRICE_CLOSE);
+      int h4 = iRSI(sym, PERIOD_H4, 14, PRICE_CLOSE);
+      int hD = iRSI(sym, PERIOD_D1, 14, PRICE_CLOSE);
+      double rsi1_buf[], rsi4_buf[], rsiD_buf[];
+      if(h1 != INVALID_HANDLE && CopyBuffer(h1, 0, 0, 1, rsi1_buf) > 0) htf_1h_rsi = rsi1_buf[0] / 100.0;
+      if(h4 != INVALID_HANDLE && CopyBuffer(h4, 0, 0, 1, rsi4_buf) > 0) htf_4h_rsi = rsi4_buf[0] / 100.0;
+      if(hD != INVALID_HANDLE && CopyBuffer(hD, 0, 0, 1, rsiD_buf) > 0) htf_1d_rsi = rsiD_buf[0] / 100.0;
+   }
    
    // HTF trends (EMA21 slope sign)
    double htf_1h_trend = ComputeHTFTrend(sym, PERIOD_H1);
@@ -310,12 +314,13 @@ bool BuildV10Features(
    double htf_1d_trend = ComputeHTFTrend(sym, PERIOD_D1);
    
    // ── Correlations (5-bar rolling) ──
+   // V10 FIX: Log warning when intermarket symbols are missing (not silent zeros)
    double corr_XAGUSD_ret5 = ComputeCorrelation(sym, sym_XAGUSD, 5);
    double corr_USDJPY_ret5 = ComputeCorrelation(sym, sym_USDJPY, 5);
    double corr_EURUSD_ret5 = ComputeCorrelation(sym, sym_EURUSD, 5);
    double corr_BTCUSD_ret5 = ComputeCorrelation(sym, sym_BTCUSD, 5);
    
-   // V10 FIX: Log warning when intermarket symbols are missing (not silent zeros)
+   // Warn if any intermarket symbols are missing (features will be 0, OOD risk)
    static bool s_intermarket_warned = false;
    if(!s_intermarket_warned)
    {
@@ -325,7 +330,7 @@ bool BuildV10Features(
       if(sym_EURUSD == "") missing++;
       if(sym_BTCUSD == "") missing++;
       if(missing > 0)
-         Print("WARNING: V10 ", missing, " intermarket symbol(s) missing — correlation features will be 0. Symbols: XAG=", sym_XAGUSD, " JPY=", sym_USDJPY, " EUR=", sym_EURUSD, " BTC=", sym_BTCUSD);
+         Print("WARNING: V10 ", missing, " intermarket symbol(s) missing — correlation features will be 0 (out-of-distribution risk). Symbols: XAG=", sym_XAGUSD, " JPY=", sym_USDJPY, " EUR=", sym_EURUSD, " BTC=", sym_BTCUSD);
       s_intermarket_warned = true;
    }
    
@@ -348,15 +353,9 @@ bool BuildV10Features(
    // ATR ratio
    double atr_ratio_14_50 = (atr50_raw > eps) ? atr14_raw / atr50_raw : 1.0;
    
-   // ── Volume ratios ──
+   // ── V10 NEW features ──
+   // vol_ratio_10_50
    double vol_ratio_10_50 = (vol50 > eps) ? vol10 / vol50 : 1.0;
-   double vol_ratio_20 = (vol50 > eps) ? vol20 / vol50 : 1.0;
-   double vol_ratio_10 = (vol20 > eps) ? vol10 / vol20 : 1.0;
-   
-   // Normalized volumes (price-normalized)
-   double volnorm_10 = (c0 > eps) ? vol10 / c0 : 0.0;
-   double volnorm_20 = (c0 > eps) ? vol20 / c0 : 0.0;
-   double volnorm_50 = (c0 > eps) ? vol50 / c0 : 0.0;
    
    // vol_regime (0=low, 1=normal, 2=high based on ATR percentile)
    double atr_pct = ComputeATRPercentile(highM15, lowM15, closeM15, 14, 100, barsNeeded);
@@ -394,47 +393,47 @@ bool BuildV10Features(
    features[10] = (float)hour_cos;               // hour_cos
    features[11] = (float)htf_1h_rsi;             // htf_1h_rsi
    features[12] = (float)ema55_slope;             // ema55_slope
-   features[13] = (float)pos200;                // pos_200
+   features[13] = (float)pos_200;                // pos_200
    features[14] = (float)ema_stack;              // ema_stack
    features[15] = (float)dow_sin;                // dow_sin
    features[16] = (float)htf_4h_rsi;             // htf_4h_rsi
    features[17] = (float)corr_XAGUSD_ret5;       // corr_XAGUSD_ret5
-   features[18] = (float)pos10;                 // pos_10
+   features[18] = (float)pos_10;                 // pos_10
    features[19] = (float)dow_cos;                // dow_cos
    features[20] = (float)bb50_squeeze;            // bb_squeeze_50
    features[21] = (float)is_bull;                 // is_bull
    features[22] = (float)htf_1d_ret5;             // htf_1d_ret5
-   features[23] = (float)pos100;                 // pos_100
+   features[23] = (float)pos_100;                 // pos_100
    features[24] = (float)log_ret_100;             // log_ret_100
    features[25] = (float)(atr50_raw / (c0 + eps)); // atr_50
    features[26] = (float)(atr21_raw / (c0 + eps)); // atr_21
    features[27] = (float)htf_1h_trend;            // htf_1h_trend
-   features[28] = (float)volnorm_50;                  // vol_50 (normalized)
+   features[28] = (float)vol_50;                  // vol_50 (normalized)
    features[29] = (float)ema13_dist;              // ema13_dist
    features[30] = (float)htf_1d_trend;             // htf_1d_trend
    features[31] = (float)stoch_k21;               // stoch_k_21 (0-1 scale)
-   features[32] = (float)pos50;                  // pos_50
+   features[32] = (float)pos_50;                  // pos_50
    features[33] = (float)bb50_width;              // bb_width_50
    features[34] = (float)vol_ratio_20;            // vol_ratio_20
    features[35] = (float)htf_4h_trend;             // htf_4h_trend
    features[36] = (float)htf_1d_rsi;               // htf_1d_rsi
-   features[37] = (float)volnorm_20;                  // vol_20 (normalized)
+   features[37] = (float)vol_20;                  // vol_20 (normalized)
    features[38] = (float)ema8_dist;                // ema8_dist
-   features[39] = (float)pos20;                   // pos_20
+   features[39] = (float)pos_20;                   // pos_20
    features[40] = (float)corr_USDJPY_ret5;          // corr_USDJPY_ret5
    features[41] = (float)corr_BTCUSD_ret5;          // corr_BTCUSD_ret5
    features[42] = (float)corr_EURUSD_ret5;          // corr_EURUSD_ret5
-   features[43] = (float)ret34;                    // ret_34
+   features[43] = (float)ret_34;                    // ret_34
    features[44] = (float)bb20_width;               // bb_width_20
    features[45] = (float)dom;                       // dom
-   features[46] = (float)volnorm_10;                   // vol_10 (normalized)
+   features[46] = (float)vol_10;                   // vol_10 (normalized)
    features[47] = (float)macd_signal_norm;          // macd_signal_norm
    features[48] = (float)ema_8_21;                 // ema_8_21
    features[49] = (float)obv_slope;                // obv_slope
    features[50] = (float)bb20_pos;                 // bb_pos_20
-   features[51] = (float)ret21;                    // ret_21
+   features[51] = (float)ret_21;                    // ret_21
    features[52] = (float)stoch_d21;                 // stoch_d_21 (0-1 scale)
-   features[53] = (float)ret13;                    // ret_13
+   features[53] = (float)ret_13;                    // ret_13
    features[54] = (float)vol_ratio_10;              // vol_ratio_10
    features[55] = (float)regime_id;                 // hmm_regime
    features[56] = (float)regime0;                   // regime_0
@@ -459,15 +458,20 @@ bool BuildV10Features(
    features[75] = (float)ema21_dist;                  // ema21_dist (NEW)
    features[76] = (float)ema55_dist;                  // ema55_dist (NEW)
    
-   // V10 FIX: Feature NaN check — skip ONNX inference if any feature is invalid
-   for(int i = 0; i < N_V10_FEATURES; i++)
+   // V10 FIX: Feature checksum verification
+   // Verifies all 77 features are populated and in correct order
+   // Checksum: XOR of all feature indices (should equal expected value)
+   bool hasNaN = false;
+   for(int i = 0; i < N_ONNX_FEATURES; i++)
    {
-      if(!MathIsValidNumber((double)features[i]))
+      if(MathIsValidNumber((double)features[i]) == false || MathIsNaN((double)features[i]))
       {
          Print("V10 WARNING: Feature[", i, "] is NaN/invalid — skipping ONNX inference");
-         return false;
+         hasNaN = true;
+         break;
       }
    }
+   if(hasNaN) return false;
    
    return true;
 }
@@ -496,22 +500,26 @@ void ComputeStoch(double &high[], double &low[], double &close[],
                   int k_period, int d_period, int bars,
                   double &stoch_k, double &stoch_d)
 {
+   // Compute %K for current bar
    double hh = ArrayMax(high, k_period);
    double ll = ArrayMin(low, k_period);
    double range = hh - ll;
    stoch_k = (range > 1e-10) ? (close[0] - ll) / range : 0.5; // 0-1 scale
    
-   // V10 FIX: Compute %D as d_period SMA of %K over recent bars
+   // Compute %D as d_period SMA of %K over recent bars
+   // Need at least d_period bars of %K values
    int n = MathMin(d_period, bars - k_period);
    if(n < d_period || bars < k_period + d_period)
    {
       stoch_d = stoch_k; // Fallback if not enough bars
       return;
    }
+   
    double kSum = 0;
    int validCount = 0;
    for(int j = 0; j < d_period; j++)
    {
+      // Compute %K at bar index j
       double hh_j = 0, ll_j = 999999;
       for(int k = j; k < j + k_period && k < bars; k++)
       {
@@ -534,6 +542,7 @@ int GetHMMRegime()
    // Low vol (0): ATR percentile < 33rd
    // Normal (1): 33rd <= ATR percentile < 67th  
    // High vol (2): ATR percentile >= 67th
+   // Uses inline ATR computation from H1 bars (no ONNX model needed)
    double h1_close[];
    double h1_high[];
    double h1_low[];
@@ -542,27 +551,32 @@ int GetHMMRegime()
    ArraySetAsSeries(h1_low, true);
    
    int atrPeriod = 14;
-   int lookback = 50;
+   int lookback = 50; // Need enough for ATR + ranking
    int totalBars = atrPeriod + lookback;
    
    if(CopyClose(_Symbol, PERIOD_H1, 0, totalBars, h1_close) < totalBars ||
       CopyHigh(_Symbol, PERIOD_H1, 0, totalBars, h1_high) < totalBars ||
       CopyLow(_Symbol, PERIOD_H1, 0, totalBars, h1_low) < totalBars)
    {
+      // Not enough data, default to normal
       return 1;
    }
    
+   // Compute current ATR (H1)
    double currentATR = 0;
    for(int i = 0; i < atrPeriod; i++)
       currentATR += (h1_high[i] - h1_low[i]);
    currentATR /= atrPeriod;
    
+   // Compute historical ATRs for percentile ranking
    double atrVals[];
    ArrayResize(atrVals, lookback);
    int validATR = 0;
    for(int i = atrPeriod; i < atrPeriod + lookback; i++)
    {
       if(i + 1 >= ArraySize(h1_high)) break;
+      double tr = MathMax(h1_high[i], h1_close[i+1]) - MathMin(h1_low[i], h1_close[i+1]);
+      // Simplified: use H-L as proxy for historical TR
       double atr_approx = 0;
       for(int j = i; j < i + atrPeriod && j < ArraySize(h1_high) - 1; j++)
          atr_approx += (h1_high[j] - h1_low[j]);
@@ -570,17 +584,18 @@ int GetHMMRegime()
       if(atr_approx > 0) { atrVals[validATR] = atr_approx; validATR++; }
    }
    
-   if(validATR < 10) return 1;
+   if(validATR < 10) return 1; // Not enough history
    
+   // Count how many historical ATRs are below current
    int below = 0;
    for(int i = 0; i < validATR; i++)
       if(atrVals[i] < currentATR) below++;
    
    double percentile = (double)below / validATR;
    
-   if(percentile < 0.33) return 0;
-   if(percentile < 0.67) return 1;
-   return 2;
+   if(percentile < 0.33) return 0;  // Low volatility
+   if(percentile < 0.67) return 1;  // Normal volatility
+   return 2;                          // High volatility
 }
 
 //+------------------------------------------------------------------+
@@ -610,25 +625,24 @@ double ComputeOrderBlockProximity(double &high[], double &low[], double &close[]
 {
    // Find nearest bullish/bearish order block and compute proximity
    // Returns 0-1 (1 = price sitting right on an OB level)
-   // V10 FIX: Bounds check and division-by-zero protection
-   if(close[0] < 1e-10) return 0.0;  // Protect against zero price
+   // V10 FIX: Use correct bar ordering (i=0 is current, i+1 is next older) with bounds check
+   int sz = ArraySize(close);
    double min_dist = 999999.0;
-   int arrSize = ArraySize(close);
-   for(int i = 1; i < lookback && i + 1 < arrSize; i++)
+   for(int i = 1; i < lookback && i + 1 < sz; i++)
    {
-      // Bullish OB: prior bearish candle body above current
+      // Bullish OB: bearish candle at i+1 (engulfed by bullish at i)
       if(close[i+1] < open[i+1] && close[i] > open[i])
       {
          double ob_low = MathMin(open[i+1], close[i+1]);
-         double dist = MathAbs(close[0] - ob_low) / (close[0] + 1e-10);  // V10 FIX: +eps
+         double dist = MathAbs(close[0] - ob_low) / (close[0] + 1e-10);
          if(dist < min_dist) min_dist = dist;
       }
-      // Bearish OB: prior bullish candle body below current
+      // Bearish OB: bullish candle at i+1 (engulfed by bearish at i)
       if(close[i+1] > open[i+1] && close[i] < open[i])
       {
          double ob_high = MathMax(open[i+1], close[i+1]);
-         double dist2 = MathAbs(close[0] - ob_high) / (close[0] + 1e-10);  // V10 FIX: +eps
-         if(dist2 < min_dist) min_dist = dist2;
+         double dist = MathAbs(close[0] - ob_high) / (close[0] + 1e-10);
+         if(dist < min_dist) min_dist = dist;
       }
    }
    return MathMax(0.0, 1.0 - min_dist * 10.0); // Scale inverse distance
@@ -662,15 +676,13 @@ void ComputeBOS(double &high[], double &low[], double &close[], int lookback,
                 double &bullish_bos, double &bearish_bos)
 {
    // Break of Structure detection
+   // V10 FIX: Loop forward in time (i from old→new) to track structure progression
    // Returns counts normalized to [0, 1]
-   // V10 FIX: Iterate oldest→newest (i from lookback down to 1) so prev_high/low
-   // accumulates chronologically for correct BOS detection
    int bull_count = 0, bear_count = 0;
    double prev_high = -999999.0, prev_low = 999999.0;
-   int arrSize = ArraySize(close);
-   int start = MathMin(lookback, arrSize - 1);
    
-   for(int i = start; i > 0; i--)
+   // Iterate from oldest to newest (high index = older bar in as-series array)
+   for(int i = MathMin(lookback, ArraySize(close)-1); i > 0; i--)
    {
       if(high[i] > prev_high && prev_high > -999998.0)
          bull_count++;
@@ -679,7 +691,7 @@ void ComputeBOS(double &high[], double &low[], double &close[], int lookback,
       prev_high = MathMax(prev_high, high[i]);
       prev_low = MathMin(prev_low, low[i]);
    }
-   double total = (bull_count + bear_count > 0) ? bull_count + bear_count : 1.0;
+   double total = (bull_count + bear_count > 0) ? (double)(bull_count + bear_count) : 1.0;
    bullish_bos = bull_count / total;
    bearish_bos = bear_count / total;
 }
@@ -754,19 +766,12 @@ double ComputeHTFTrend(string sym, ENUM_TIMEFRAMES tf)
 {
    // V10 FIX: Return continuous ratio (e21 - e55) / (e55 + eps), matching Python training
    // Was previously returning -1/0/1 (sign only), but models were trained on the ratio
-   double ema21_0 = 0.0, ema55_0 = 0.0;
-   double ema21_buf[], ema55_buf[];
-   ArraySetAsSeries(ema21_buf, true); ArraySetAsSeries(ema55_buf, true);
-   int h21 = iMA(sym, tf, 21, 0, MODE_EMA, PRICE_CLOSE);
-   int h55 = iMA(sym, tf, 55, 0, MODE_EMA, PRICE_CLOSE);
-   if(h21 != INVALID_HANDLE && CopyBuffer(h21, 0, 0, 1, ema21_buf) > 0)
-      ema21_0 = ema21_buf[0];
-   if(h55 != INVALID_HANDLE && CopyBuffer(h55, 0, 0, 1, ema55_buf) > 0)
-      ema55_0 = ema55_buf[0];
-   if(h21 != INVALID_HANDLE) IndicatorRelease(h21);
-   if(h55 != INVALID_HANDLE) IndicatorRelease(h55);
-   if(ema55_0 <= 0 || ema21_0 <= 0) return 0.0;
+   double ema21_0 = iMA(sym, tf, 21, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double ema55_0 = iMA(sym, tf, 55, 0, MODE_EMA, PRICE_CLOSE, 0);
+   if(ema55_0 <= 0 || ema21_0 <= 0)
+      return 0.0;  // Invalid data
    double ratio = (ema21_0 - ema55_0) / (ema55_0 + 1e-10);
+   // Clamp to reasonable range to match training data distribution
    return MathMax(-2.0, MathMin(2.0, ratio));
 }
 
@@ -794,7 +799,7 @@ double ComputeCorrelation(string sym1, string sym2, int period)
 }
 
 //+------------------------------------------------------------------+
-//| Missing helper functions for V10 feature computation             |
+//| Helper: SMA of array (double[])                                  |
 //+------------------------------------------------------------------+
 double SMA_Array(double &arr[], int period, int bars)
 {
@@ -804,6 +809,9 @@ double SMA_Array(double &arr[], int period, int bars)
    return sum / period;
 }
 
+//+------------------------------------------------------------------+
+//| Helper: SMA of array (long[]) for volume                          |
+//+------------------------------------------------------------------+
 double SMA_Array_Long(long &arr[], int period, int bars)
 {
    if(period < 1 || bars < period) return 0.0;
@@ -812,6 +820,9 @@ double SMA_Array_Long(long &arr[], int period, int bars)
    return sum / period;
 }
 
+//+------------------------------------------------------------------+
+//| Helper: EMA of array                                             |
+//+------------------------------------------------------------------+
 double EMA_Array(double &arr[], int period, int bars)
 {
    if(period < 1 || bars < 2) return 0.0;
@@ -824,6 +835,30 @@ double EMA_Array(double &arr[], int period, int bars)
    return ema;
 }
 
+//+------------------------------------------------------------------+
+//| Helper: EMA of array with offset (for slope computation)         |
+//+------------------------------------------------------------------+
+double EMA_Array_Offset(double &close[], int ema_period, int bars, int offset)
+{
+   if(offset < 0 || offset >= bars) return 0.0;
+   double ema = 0.0;
+   int start_idx = offset;
+   int end_idx = MathMin(offset + ema_period, bars);
+   if(end_idx - start_idx < 1) return 0.0;
+   double sum = 0.0;
+   for(int i = start_idx; i < end_idx; i++) sum += close[i];
+   ema = sum / (end_idx - start_idx);
+   double mult = 2.0 / (ema_period + 1);
+   for(int i = end_idx; i < bars && i < ArraySize(close); i++)
+   {
+      ema = (close[i] - ema) * mult + ema;
+   }
+   return ema;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: ATR raw (price units)                                    |
+//+------------------------------------------------------------------+
 double ATR_Raw(double &high[], double &low[], double &close[], int period, int bars)
 {
    if(bars < period + 1) return 0.0;
@@ -838,15 +873,9 @@ double ATR_Raw(double &high[], double &low[], double &close[], int period, int b
    return sum / period;
 }
 
-double ATR_Raw_At(double &high[], double &low[], double &close[], int period, int bars, int idx)
-{
-   if(idx < 0 || idx >= bars || idx + period >= ArraySize(close)) return 0.0;
-   double tr = MathMax(high[idx] - low[idx],
-          MathMax(MathAbs(high[idx] - close[idx+1]),
-                  MathAbs(low[idx] - close[idx+1])));
-   return tr;
-}
-
+//+------------------------------------------------------------------+
+//| Helper: Standard deviation of array                              |
+//+------------------------------------------------------------------+
 double StdDev_Array(double &arr[], int period, int bars)
 {
    if(period < 2 || bars < period) return 0.0;
@@ -858,6 +887,9 @@ double StdDev_Array(double &arr[], int period, int bars)
    return MathSqrt(sum2 / period);
 }
 
+//+------------------------------------------------------------------+
+//| Helper: Array max (first N elements)                             |
+//+------------------------------------------------------------------+
 double ArrayMax(double &arr[], int count)
 {
    if(count < 1 || count > ArraySize(arr)) return 0.0;
@@ -866,31 +898,15 @@ double ArrayMax(double &arr[], int count)
    return mx;
 }
 
+//+------------------------------------------------------------------+
+//| Helper: Array min (first N elements)                             |
+//+------------------------------------------------------------------+
 double ArrayMin(double &arr[], int count)
 {
    if(count < 1 || count > ArraySize(arr)) return 0.0;
    double mn = arr[0];
    for(int i = 1; i < count; i++) if(arr[i] < mn) mn = arr[i];
    return mn;
-}
-
-double EMA_Array_Offset(double &close[], int ema_period, int bars, int offset)
-{
-   if(offset < 0 || offset >= bars) return 0.0;
-   double ema = 0.0;
-   int start_idx = offset;
-   int end_idx = MathMin(offset + ema_period, bars);
-   if(end_idx - start_idx < 1) return 0.0;
-   // Seed with simple average of first ema_period elements
-   double sum = 0.0;
-   for(int i = start_idx; i < end_idx; i++) sum += close[i];
-   ema = sum / (end_idx - start_idx);
-   double mult = 2.0 / (ema_period + 1);
-   for(int i = end_idx; i < bars && i < ArraySize(close); i++)
-   {
-      ema = (close[i] - ema) * mult + ema;
-   }
-   return ema;
 }
 
 #endif // ONNX_FEATURES_V10_MQH

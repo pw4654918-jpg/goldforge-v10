@@ -64,6 +64,7 @@ input bool     V10_SessionSpread        = true;       // Adaptive spread limits 
 input group "═══ V10 ONNX MODELS ═══"
 input string   V10_ONNXModelXGB        = "v10_premium_xgboost.onnx";
 input string   V10_ONNXModelLGB        = "v10_premium_lightgbm.onnx";
+input string   V10_ONNXModelCAT        = "v10_premium_catboost.onnx";
 // ── V10 ENSEMBLE — Learned Weights ──
 // NOTE: These are DEFAULT values only. They're copied to g_v10_wCAT/XGB/LGB globals
 // at init, and then drift-adapted at runtime. Changing these inputs overrides them.

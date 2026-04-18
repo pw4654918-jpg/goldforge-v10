@@ -184,9 +184,9 @@ bool BuildV10Features(
    ComputeBB(closeM15, 50, 2.0, barsNeeded, bb50_upper, bb50_lower, bb50_mid, bb50_width, bb50_squeeze);
    
    // ── Volumes ──
-   double vol10 = SMA_Array(volM15, 10, barsNeeded);
-   double vol20 = SMA_Array(volM15, 20, barsNeeded);
-   double vol50 = SMA_Array(volM15, 50, barsNeeded);
+   double vol10 = SMA_Array_Long(volM15, 10, barsNeeded);
+   double vol20 = SMA_Array_Long(volM15, 20, barsNeeded);
+   double vol50 = SMA_Array_Long(volM15, 50, barsNeeded);
    
    // ── Stochastics ──
    double stoch_k21, stoch_d21;
@@ -204,12 +204,27 @@ bool BuildV10Features(
    double regime2 = (regime_id == 2) ? 1.0 : 0.0;
    
    // ── RSI 14 (V10 FIX: normalized to 0-1 range, not 0-100) ──
-   double rsi14_raw = iRSI(sym, PERIOD_M15, 14, PRICE_CLOSE, 0);
+   double rsi14_raw = 50.0;
+   int h_rsi = iRSI(sym, PERIOD_M15, 14, PRICE_CLOSE);
+   if(h_rsi != INVALID_HANDLE) {
+      double rsi14_buf[];
+      ArraySetAsSeries(rsi14_buf, true);
+      if(CopyBuffer(h_rsi, 0, 0, 1, rsi14_buf) > 0) rsi14_raw = rsi14_buf[0];
+   }
    double rsi14 = rsi14_raw / 100.0; // FIX: scale to [0,1]
    
    // ── MACD ──
-   double macd_line = iMACD(sym, PERIOD_M15, 12, 26, 9, PRICE_CLOSE, 0, 0); // main
-   double macd_signal = iMACD(sym, PERIOD_M15, 12, 26, 9, PRICE_CLOSE, 0, 1); // signal
+   double macd_line = 0.0, macd_signal = 0.0;
+   {
+      int h_macd = iMACD(sym, PERIOD_M15, 12, 26, 9, PRICE_CLOSE);
+      if(h_macd != INVALID_HANDLE) {
+         double macd_buf[], signal_buf[];
+         ArraySetAsSeries(macd_buf, true); ArraySetAsSeries(signal_buf, true);
+         if(CopyBuffer(h_macd, 0, 0, 2, macd_buf) > 0 && CopyBuffer(h_macd, 1, 0, 2, signal_buf) > 0) {
+            macd_line = macd_buf[0]; macd_signal = signal_buf[0];
+         }
+      }
+   }
    double macd_signal_norm = (macd_signal != 0.0) ? (macd_line - macd_signal) / (MathAbs(macd_signal) + eps) : 0.0;
    
    // ── Returns ──
@@ -282,9 +297,16 @@ bool BuildV10Features(
       htf_1d_ret5 = (close1d[0] - close1d[5]) / (close1d[5] + eps);
    
    // HTF RSI (normalized 0-1)
-   double htf_1h_rsi = iRSI(sym, PERIOD_H1, 14, PRICE_CLOSE, 0) / 100.0;
-   double htf_4h_rsi = iRSI(sym, PERIOD_H4, 14, PRICE_CLOSE, 0) / 100.0;
-   double htf_1d_rsi = iRSI(sym, PERIOD_D1, 14, PRICE_CLOSE, 0) / 100.0;
+   double htf_1h_rsi = 0.5, htf_4h_rsi = 0.5, htf_1d_rsi = 0.5;
+   {
+      int h1 = iRSI(sym, PERIOD_H1, 14, PRICE_CLOSE);
+      int h4 = iRSI(sym, PERIOD_H4, 14, PRICE_CLOSE);
+      int hD = iRSI(sym, PERIOD_D1, 14, PRICE_CLOSE);
+      double rsi1_buf[], rsi4_buf[], rsiD_buf[];
+      if(h1 != INVALID_HANDLE && CopyBuffer(h1, 0, 0, 1, rsi1_buf) > 0) htf_1h_rsi = rsi1_buf[0] / 100.0;
+      if(h4 != INVALID_HANDLE && CopyBuffer(h4, 0, 0, 1, rsi4_buf) > 0) htf_4h_rsi = rsi4_buf[0] / 100.0;
+      if(hD != INVALID_HANDLE && CopyBuffer(hD, 0, 0, 1, rsiD_buf) > 0) htf_1d_rsi = rsiD_buf[0] / 100.0;
+   }
    
    // HTF trends (EMA21 slope sign)
    double htf_1h_trend = ComputeHTFTrend(sym, PERIOD_H1);
@@ -774,6 +796,117 @@ double ComputeCorrelation(string sym1, string sym2, int period)
    }
    double denom = MathSqrt((period * sum_x2 - sum_x * sum_x) * (period * sum_y2 - sum_y * sum_y));
    return (denom > 1e-10) ? (period * sum_xy - sum_x * sum_y) / denom : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: SMA of array (double[])                                  |
+//+------------------------------------------------------------------+
+double SMA_Array(double &arr[], int period, int bars)
+{
+   if(period < 1 || bars < period) return 0.0;
+   double sum = 0.0;
+   for(int i = 0; i < period; i++) sum += arr[i];
+   return sum / period;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: SMA of array (long[]) for volume                          |
+//+------------------------------------------------------------------+
+double SMA_Array_Long(long &arr[], int period, int bars)
+{
+   if(period < 1 || bars < period) return 0.0;
+   double sum = 0.0;
+   for(int i = 0; i < period; i++) sum += (double)arr[i];
+   return sum / period;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: EMA of array                                             |
+//+------------------------------------------------------------------+
+double EMA_Array(double &arr[], int period, int bars)
+{
+   if(period < 1 || bars < 2) return 0.0;
+   double ema = arr[period - 1];
+   double mult = 2.0 / (period + 1);
+   for(int i = period; i < bars && i < ArraySize(arr); i++)
+   {
+      ema = (arr[i] - ema) * mult + ema;
+   }
+   return ema;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: EMA of array with offset (for slope computation)         |
+//+------------------------------------------------------------------+
+double EMA_Array_Offset(double &close[], int ema_period, int bars, int offset)
+{
+   if(offset < 0 || offset >= bars) return 0.0;
+   double ema = 0.0;
+   int start_idx = offset;
+   int end_idx = MathMin(offset + ema_period, bars);
+   if(end_idx - start_idx < 1) return 0.0;
+   double sum = 0.0;
+   for(int i = start_idx; i < end_idx; i++) sum += close[i];
+   ema = sum / (end_idx - start_idx);
+   double mult = 2.0 / (ema_period + 1);
+   for(int i = end_idx; i < bars && i < ArraySize(close); i++)
+   {
+      ema = (close[i] - ema) * mult + ema;
+   }
+   return ema;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: ATR raw (price units)                                    |
+//+------------------------------------------------------------------+
+double ATR_Raw(double &high[], double &low[], double &close[], int period, int bars)
+{
+   if(bars < period + 1) return 0.0;
+   double sum = 0.0;
+   for(int i = 0; i < period; i++)
+   {
+      double tr = MathMax(high[i] - low[i],
+             MathMax(MathAbs(high[i] - close[i+1]),
+                     MathAbs(low[i] - close[i+1])));
+      sum += tr;
+   }
+   return sum / period;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Standard deviation of array                              |
+//+------------------------------------------------------------------+
+double StdDev_Array(double &arr[], int period, int bars)
+{
+   if(period < 2 || bars < period) return 0.0;
+   double mean = 0.0;
+   for(int i = 0; i < period; i++) mean += arr[i];
+   mean /= period;
+   double sum2 = 0.0;
+   for(int i = 0; i < period; i++) sum2 += (arr[i] - mean) * (arr[i] - mean);
+   return MathSqrt(sum2 / period);
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Array max (first N elements)                             |
+//+------------------------------------------------------------------+
+double ArrayMax(double &arr[], int count)
+{
+   if(count < 1 || count > ArraySize(arr)) return 0.0;
+   double mx = arr[0];
+   for(int i = 1; i < count; i++) if(arr[i] > mx) mx = arr[i];
+   return mx;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Array min (first N elements)                             |
+//+------------------------------------------------------------------+
+double ArrayMin(double &arr[], int count)
+{
+   if(count < 1 || count > ArraySize(arr)) return 0.0;
+   double mn = arr[0];
+   for(int i = 1; i < count; i++) if(arr[i] < mn) mn = arr[i];
+   return mn;
 }
 
 #endif // ONNX_FEATURES_V10_MQH

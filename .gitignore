@@ -1,0 +1,36 @@
+# ONNX models (too large for git, use Git LFS or separate storage)
+*.onnx
+
+# Compiled EA binaries
+*.ex5
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*_secret*
+*_password*
+
+# Logs
+*.log
+logs/
+
+# Backtest data (too large)
+*.csv
+*.h5
+*.parquet

@@ -25,6 +25,18 @@
 #ifndef V10_STRATEGY_MQH
 #define V10_STRATEGY_MQH
 
+// ── V10 Named Constants (replacing magic numbers) ──
+#define V10_DRIFT_PENALTY    0.05       // Drift weight redistribution fraction (was 0.10, reduced to prevent over-shifting)
+#define V10_STRUCTURE_SL_PAD 0.2        // Structure SL padding in ATR multiples
+#define V10_SL_FALLBACK_MULT 2.0        // Fallback SL when no swing found (xATR)
+#define V10_LOT_SCALE_MIN    0.7        // Min lot scaling multiplier
+#define V10_LOT_SCALE_MAX    1.5        // Max lot scaling multiplier
+#define V10_META_CONF_SCALE_MIN 0.3     // Min meta-confidence lot scale
+#define V10_META_CONF_SCALE_MAX 1.2     // Max meta-confidence lot scale
+#define V10_MIN_TRADES_KELLY  5          // Minimum trades before Kelly sizing activates
+#define V10_MAX_KELLY_FRAC    0.15       // Max Kelly fraction cap
+#define V10_KELLY_WINDOW      50         // Kelly rolling window size
+
 // ── V10 Inputs ──
 input group "═══ V10 STRATEGY ═══"
 input bool     V10_UseStructureSL      = true;      // Snap SL to swing structure
@@ -52,16 +64,18 @@ input bool     V10_SessionSpread        = true;       // Adaptive spread limits 
 input group "═══ V10 ONNX MODELS ═══"
 input string   V10_ONNXModelXGB        = "v10_premium_xgboost.onnx";
 input string   V10_ONNXModelLGB        = "v10_premium_lightgbm.onnx";
-input string   V10_ONNXModelCAT        = "v10_premium_catboost.onnx";
-input double   V10_WeightCAT           = 0.3125;   // CatBoost weight (learned)
-input double   V10_WeightXGB            = 0.5266;   // XGBoost weight (learned, DOMINANT)
-input double   V10_WeightLGB            = 0.1608;   // LightGBM weight (learned)
+// ── V10 ENSEMBLE — Learned Weights ──
+// NOTE: These are DEFAULT values only. They're copied to g_v10_wCAT/XGB/LGB globals
+// at init, and then drift-adapted at runtime. Changing these inputs overrides them.
+input double   V10_WeightCAT           = 0.3125;   // CatBoost weight (default, adapted by drift)
+input double   V10_WeightXGB            = 0.5266;   // XGBoost weight (default, DOMINANT, adapted by drift)
+input double   V10_WeightLGB            = 0.1608;   // LightGBM weight (default, adapted by drift)
 
 // ── V10 META-CONFIDENCE — L2 Logistic Regression ──
 input group "═══ V10 META-CONFIDENCE ═══"
 input bool     V10_UseMetaConfidence   = true;      // Gate trades by meta-confidence
 input double   V10_MetaConfThreshold   = 0.50;      // Min meta-confidence to trade (0.5 = neutral)
-input double   V10_MetaConfLotScale    = true;      // Scale lots by meta-confidence value
+input bool     V10_MetaConfLotScale    = true;      // Scale lots by meta-confidence value
 
 // ── V10 REGIME-ADAPTIVE BARRIERS ──
 input group "═══ V10 REGIME BARRIERS ═══"
@@ -256,9 +270,9 @@ double V10_StructureSL(ENUM_ORDER_TYPE type, double entryPrice, double atrVal)
    if(!V10_UseStructureSL)
    {
       if(type == ORDER_TYPE_BUY)
-         return entryPrice - atrVal * 2.0;
+         return entryPrice - atrVal * V10_SL_FALLBACK_MULT;
       else
-         return entryPrice + atrVal * 2.0;
+         return entryPrice + atrVal * V10_SL_FALLBACK_MULT;
    }
    
    double highs[], lows[];
@@ -279,42 +293,44 @@ double V10_StructureSL(ENUM_ORDER_TYPE type, double entryPrice, double atrVal)
    if(type == ORDER_TYPE_BUY)
    {
       double bestSwing = 0;
+      double bestDist = 999999.0; // V10 FIX: Track closest valid swing (not first)
       for(int i = 2; i < lookback; i++)
       {
          if(i + 1 < lookback && lows[i] < lows[i-1] && lows[i] < lows[i+1])
          {
             double dist = entryPrice - lows[i];
-            if(dist > minSL && dist < maxSL)
+            if(dist > minSL && dist < maxSL && dist < bestDist)
             {
                bestSwing = lows[i];
-               break;
+               bestDist = dist;
             }
          }
       }
       if(bestSwing > 0)
-         return bestSwing - atrVal * 0.2;
+         return bestSwing - atrVal * V10_STRUCTURE_SL_PAD;
       else
-         return entryPrice - atrVal * 2.0;
+         return entryPrice - atrVal * V10_SL_FALLBACK_MULT;
    }
    else // SELL
    {
       double bestSwing = 0;
+      double bestDist = 999999.0; // V10 FIX: Track closest valid swing (not first)
       for(int i = 2; i < lookback; i++)
       {
          if(i + 1 < lookback && highs[i] > highs[i-1] && highs[i] > highs[i+1])
          {
             double dist = highs[i] - entryPrice;
-            if(dist > minSL && dist < maxSL)
+            if(dist > minSL && dist < maxSL && dist < bestDist)
             {
                bestSwing = highs[i];
-               break;
+               bestDist = dist;
             }
          }
       }
       if(bestSwing > 0)
-         return bestSwing + atrVal * 0.2;
+         return bestSwing + atrVal * V10_STRUCTURE_SL_PAD;
       else
-         return entryPrice + atrVal * 2.0;
+         return entryPrice + atrVal * V10_SL_FALLBACK_MULT;
    }
 }
 
@@ -326,29 +342,30 @@ double V10_ChandelierTrail(ulong ticket, ENUM_POSITION_TYPE posType, double curr
 {
    if(!V10_UseChandelierTrail) return currentSL;
    
-   double highs[], lows[];
+   double highs[], lows[], closes[];
    int lb = V10_ChandelierLookback;
-   ArrayResize(highs, lb); ArrayResize(lows, lb);
-   ArraySetAsSeries(highs, true); ArraySetAsSeries(lows, true);
+   ArrayResize(highs, lb); ArrayResize(lows, lb); ArrayResize(closes, lb);
+   ArraySetAsSeries(highs, true); ArraySetAsSeries(lows, true); ArraySetAsSeries(closes, true);
    
-   if(CopyHigh(_Symbol, PERIOD_M15, 0, lb, highs) < lb ||
-      CopyLow(_Symbol, PERIOD_M15, 0, lb, lows) < lb)
+   if(CopyHigh(_Symbol, PERIOD_M15, 0, lb + 1, highs) < lb ||
+      CopyLow(_Symbol, PERIOD_M15, 0, lb + 1, lows) < lb ||
+      CopyClose(_Symbol, PERIOD_M15, 0, lb + 1, closes) < lb)
       return currentSL;
    
-   // Quick ATR from M15 data
+   // V10 FIX: Use True Range instead of just High-Low for ATR calculation
+   // True Range accounts for gaps, avoiding 5-15% underestimation
    double atrVal = 0;
-   double closeM15[];
-   ArraySetAsSeries(closeM15, true);
-   if(CopyClose(_Symbol, PERIOD_M15, 0, 20, closeM15) >= 20)
+   int atrPeriod = 14;
+   int atrBars = MathMin(atrPeriod, lb - 1);
+   for(int i = 0; i < atrBars; i++)
    {
-      double sumTR = 0;
-      for(int i = 0; i < 14; i++)
-      {
-         double tr = highs[i] - lows[i];
-         sumTR += tr;
-      }
-      atrVal = sumTR / 14.0;
+      double h = highs[i];
+      double l = lows[i];
+      double pc = closes[i + 1]; // Previous close
+      double tr = MathMax(h, pc) - MathMin(l, pc); // True Range
+      atrVal += tr;
    }
+   atrVal /= atrBars;
    if(atrVal <= 0) return currentSL;
    
    double newSL = currentSL;
@@ -463,7 +480,7 @@ void V10_UpdateDrift(
       
       if(minRate < V10_DriftThreshold)
       {
-         double penalty = 0.10;
+         double penalty = V10_DRIFT_PENALTY;
          
          // V10: XGB is dominant, redistribute proportionally
          if(rateXGB == minRate && g_v10_wXGB > 0.05)
@@ -514,9 +531,13 @@ double V10_GetTPMultiplier(int volRegime, string regime)
 {
    double base = 3.0;
    
-   if(regime == "TRENDING" || regime == "STRONG_TREND")
+   // V10 FIX: Case-insensitive string comparison for regime names
+   string regimeUpper = regime;
+   StringToUpper(regimeUpper);
+   
+   if(regimeUpper == "TRENDING" || regimeUpper == "STRONG_TREND")
       base = 4.0;
-   else if(regime == "RANGING")
+   else if(regimeUpper == "RANGING")
       base = 2.5;
    
    if(volRegime > 0)   base += 0.5;
@@ -659,16 +680,20 @@ void V10_RecordTradeResult(double profitDollars)
 {
    if(!V10_UseKellySizing) return;
    
+   // V10 FIX: Clear the slot before writing to avoid stale data on wrap-around
    int idx = g_v10_kelly_count % 50;
+   
+   // Clear both arrays at this slot (stale data from previous cycle)
+   g_v10_kelly_wins[idx] = 0;
+   g_v10_kelly_losses[idx] = 0;
+   
    if(profitDollars >= 0)
    {
       g_v10_kelly_wins[idx] = profitDollars;
-      g_v10_kelly_losses[idx] = 0;
       g_v10_kelly_wins_n++;
    }
    else
    {
-      g_v10_kelly_wins[idx] = 0;
       g_v10_kelly_losses[idx] = MathAbs(profitDollars);
       g_v10_kelly_losses_n++;
    }

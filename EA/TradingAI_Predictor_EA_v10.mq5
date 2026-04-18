@@ -836,11 +836,12 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
     // V10: Record trade result for Kelly sizing
     V10_RecordTradeResult(profit);
     
-    // V10: Adaptive ensemble drift tracking (per-model accuracy)
-    string xgbSig = (g_xgb_probs[0] > g_xgb_probs[2]) ? "BUY" : "SELL";
-    string lgbSig = (g_lgb_probs[0] > g_lgb_probs[2]) ? "BUY" : "SELL";
-    string catSig = (g_cat_probs[0] > g_cat_probs[2]) ? "BUY" : "SELL";
-    V10_UpdateDrift(xgbSig, lgbSig, catSig, dealDir, profit > 0);
+   // V10: Adaptive ensemble drift tracking (per-model accuracy)
+   // V10 FIX: Parameter order corrected to match V10_UpdateDrift signature (CAT, XGB, LGB)
+   string xgbSig = (g_xgb_probs[0] > g_xgb_probs[2]) ? "BUY" : "SELL";
+   string lgbSig = (g_lgb_probs[0] > g_lgb_probs[2]) ? "BUY" : "SELL";
+   string catSig = (g_cat_probs[0] > g_cat_probs[2]) ? "BUY" : "SELL";
+   V10_UpdateDrift(catSig, xgbSig, lgbSig, dealDir, profit > 0);
     
     // V10: Record meta-confidence outcome for accuracy tracking
     V10_RecordMetaOutcome(predictedCorrect);
@@ -3042,7 +3043,7 @@ void RunONNXInference()
    if((h_xgb == INVALID_HANDLE && h_lgb == INVALID_HANDLE && h_cat == INVALID_HANDLE) || !UseONNX) return;
    
    // â•â•â• Gather price data on PRIMARY TF (M5 to match training) â•â•â•
-   int bars = 250;  // Need enough for EMA200 + lookbacks
+   int bars = 600;  // V10 FIX: Need 600+ bars for EMA200 convergence (was 250)
    double c_m5[], h_m5[], l_m5[], o_m5[];
    long   v_m5_raw[];
    ArrayResize(c_m5, bars); ArrayResize(h_m5, bars); ArrayResize(l_m5, bars);
